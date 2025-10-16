@@ -12,8 +12,8 @@
 #define CAMERA_DEVICE "/dev/video0"
 #define CAPTURE_WIDTH 640
 #define CAPTURE_HEIGHT 480
-// #define CAPTURE_FORMAT V4L2_PIX_FMT_YUYV  // YUYV format (commented out)
-#define CAPTURE_FORMAT V4L2_PIX_FMT_MJPEG   // MJPEG format
+#define CAPTURE_FORMAT V4L2_PIX_FMT_YUYV
+// #define CAPTURE_FORMAT V4L2_PIX_FMT_MJPEG   // MJPEG format
 #define NUM_BUFFERS 4
 
 typedef struct {
