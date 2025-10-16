@@ -25,6 +25,21 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 
+# Check for OpenH264
+pkg_check_modules(OPENH264 openh264)
+if(OPENH264_FOUND)
+  message("OpenH264 found. Will enable H264 encoding support")
+  set(OPENH264_DEFINITIONS -DENABLE_OPENH264)
+  set(OPENH264_INCLUDE_DIRS ${OPENH264_INCLUDE_DIRS})
+  set(OPENH264_LIBRARIES ${OPENH264_LIBRARIES})
+  link_directories(${OPENH264_LIBRARY_DIRS})
+else()
+  message("OpenH264 not found. H264 encoding will not be available")
+  set(OPENH264_DEFINITIONS "")
+  set(OPENH264_INCLUDE_DIRS "")
+  set(OPENH264_LIBRARIES "")
+endif()
+
 pkg_check_modules(GST gstreamer-1.0)
 if(GST_FOUND)
 
@@ -56,6 +71,7 @@ endif()
 
 include_directories(${OPEN_SRC_INSTALL_PREFIX}/include)
 include_directories(${OPEN_SRC_INCLUDE_DIRS})
+include_directories(${OPENH264_INCLUDE_DIRS})
 link_directories(${OPEN_SRC_INSTALL_PREFIX}/lib)
 
 # copy sample frames to this subproject build folder, in case developer runs sample program with command `kvsWebrtcClientMaster` from `build/samples` dir.
@@ -66,8 +82,11 @@ file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/h265SampleFrames" DESTINATION .)
 add_executable(
   kvsWebrtcClientMaster
   Common.c
-  kvsWebRTCClientMaster.c)
-target_link_libraries(kvsWebrtcClientMaster kvsWebrtcClient kvsWebrtcSignalingClient ${EXTRA_DEPS} kvsCommonLws kvspicUtils websockets)
+  kvsWebRTCClientMaster.c
+  CameraCapture.c
+  H264Encoder.c)
+target_compile_definitions(kvsWebrtcClientMaster PRIVATE ${OPENH264_DEFINITIONS})
+target_link_libraries(kvsWebrtcClientMaster kvsWebrtcClient kvsWebrtcSignalingClient ${EXTRA_DEPS} kvsCommonLws kvspicUtils websockets ${OPENH264_LIBRARIES} jpeg)
 
 add_executable(
   kvsWebrtcClientViewer

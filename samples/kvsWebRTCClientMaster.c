@@ -1,4 +1,6 @@
 #include "Samples.h"
+#include "CameraCapture.h"
+#include "H264Encoder.h"
 
 extern PSampleConfiguration gSampleConfiguration;
 
@@ -172,70 +174,97 @@ PVOID sendVideoPackets(PVOID args)
     PSampleConfiguration pSampleConfiguration = (PSampleConfiguration) args;
     RtcEncoderStats encoderStats;
     Frame frame;
-    UINT32 fileIndex = 0, frameSize;
-    CHAR filePath[MAX_PATH_LEN + 1];
     STATUS status;
     UINT32 i;
     UINT64 startTime, lastFrameTime, elapsed;
+    
+    // Camera and encoder contexts
+    CameraContext cameraCtx = {0};
+    H264EncoderContext encoderCtx = {0};
+    PBYTE cameraFrameData = NULL;
+    PBYTE yuv420Buffer = NULL;
+    PBYTE h264Data = NULL;
+    UINT32 cameraFrameSize = 0;
+    UINT32 h264Size = 0;
+    BOOL isKeyFrame = FALSE;
+    UINT32 yuv420Size = CAPTURE_WIDTH * CAPTURE_HEIGHT * 3 / 2;
+    
     MEMSET(&encoderStats, 0x00, SIZEOF(RtcEncoderStats));
     CHK_ERR(pSampleConfiguration != NULL, STATUS_NULL_ARG, "[KVS Master] Streaming session is NULL");
+
+    // Initialize camera
+    CHK_STATUS(initializeCamera(&cameraCtx, CAMERA_DEVICE, CAPTURE_WIDTH, CAPTURE_HEIGHT));
+    DLOGI("[KVS Master] Camera initialized successfully");
+
+    // Initialize H264 encoder (only for H264 codec)
+    if (pSampleConfiguration->videoCodec == RTC_CODEC_H264_PROFILE_42E01F_LEVEL_ASYMMETRY_ALLOWED_PACKETIZATION_MODE) {
+        CHK_STATUS(initializeH264Encoder(&encoderCtx, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEFAULT_FPS_VALUE, 500000)); // 500 Kbps
+        DLOGI("[KVS Master] H264 encoder initialized successfully");
+    } else {
+        CHK_ERR(FALSE, STATUS_NOT_IMPLEMENTED, "[KVS Master] Only H264 codec is supported with camera input");
+    }
+
+    // Allocate YUV420 conversion buffer
+    yuv420Buffer = (PBYTE) MEMCALLOC(1, yuv420Size);
+    CHK_ERR(yuv420Buffer != NULL, STATUS_NOT_ENOUGH_MEMORY, "[KVS Master] Failed to allocate YUV420 buffer");
 
     frame.presentationTs = 0;
     startTime = GETTIME();
     lastFrameTime = startTime;
 
     while (!ATOMIC_LOAD_BOOL(&pSampleConfiguration->appTerminateFlag)) {
-        if (pSampleConfiguration->videoCodec == RTC_CODEC_H264_PROFILE_42E01F_LEVEL_ASYMMETRY_ALLOWED_PACKETIZATION_MODE) {
-            fileIndex = fileIndex % NUMBER_OF_H264_FRAME_FILES + 1;
-            SNPRINTF(filePath, MAX_PATH_LEN, "./h264SampleFrames/frame-%04d.h264", fileIndex);
-        } else if (pSampleConfiguration->videoCodec == RTC_CODEC_H265) {
-            fileIndex = fileIndex % NUMBER_OF_H265_FRAME_FILES + 1;
-            SNPRINTF(filePath, MAX_PATH_LEN, "./h265SampleFrames/frame-%04d.h265", fileIndex);
-        }
+        // Capture frame from camera
+        CHK_STATUS(captureFrame(&cameraCtx, &cameraFrameData, &cameraFrameSize));
 
-        CHK_STATUS(readFrameFromDisk(NULL, &frameSize, filePath));
+        // Convert YUYV to YUV420
+        CHK_STATUS(convertYUYVToYUV420(cameraFrameData, yuv420Buffer, CAPTURE_WIDTH, CAPTURE_HEIGHT));
+        
+        // Decode MJPEG to YUV420
+        // CHK_STATUS(decodeMJPEGToYUV420(cameraFrameData, cameraFrameSize, yuv420Buffer, CAPTURE_WIDTH, CAPTURE_HEIGHT));
 
-        // Re-alloc if needed
-        if (frameSize > pSampleConfiguration->videoBufferSize) {
-            pSampleConfiguration->pVideoFrameBuffer = (PBYTE) MEMREALLOC(pSampleConfiguration->pVideoFrameBuffer, frameSize);
-            CHK_ERR(pSampleConfiguration->pVideoFrameBuffer != NULL, STATUS_NOT_ENOUGH_MEMORY, "[KVS Master] Failed to allocate video frame buffer");
-            pSampleConfiguration->videoBufferSize = frameSize;
-        }
+        // Encode frame to H264
+        CHK_STATUS(encodeFrame(&encoderCtx, yuv420Buffer, &h264Data, &h264Size, &isKeyFrame));
 
-        frame.frameData = pSampleConfiguration->pVideoFrameBuffer;
-        frame.size = frameSize;
-
-        CHK_STATUS(readFrameFromDisk(frame.frameData, &frameSize, filePath));
-
-        // based on bitrate of samples/h264SampleFrames/frame-*
-        encoderStats.width = 640;
-        encoderStats.height = 480;
-        encoderStats.targetBitrate = 262000;
-        frame.presentationTs += SAMPLE_VIDEO_FRAME_DURATION;
-        MUTEX_LOCK(pSampleConfiguration->streamingSessionListReadLock);
-        for (i = 0; i < pSampleConfiguration->streamingSessionCount; ++i) {
-            status = writeFrame(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &frame);
-            if (pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame && status == STATUS_SUCCESS) {
-                PROFILE_WITH_START_TIME(pSampleConfiguration->sampleStreamingSessionList[i]->offerReceiveTime, "Time to first frame");
-                pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame = FALSE;
+        if (h264Size > 0 && h264Data != NULL) {
+            // Re-alloc buffer if needed
+            if (h264Size > pSampleConfiguration->videoBufferSize) {
+                pSampleConfiguration->pVideoFrameBuffer = (PBYTE) MEMREALLOC(pSampleConfiguration->pVideoFrameBuffer, h264Size);
+                CHK_ERR(pSampleConfiguration->pVideoFrameBuffer != NULL, STATUS_NOT_ENOUGH_MEMORY, "[KVS Master] Failed to allocate video frame buffer");
+                pSampleConfiguration->videoBufferSize = h264Size;
             }
-            encoderStats.encodeTimeMsec = 4; // update encode time to an arbitrary number to demonstrate stats update
-            updateEncoderStats(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &encoderStats);
-            if (status != STATUS_SRTP_NOT_READY_YET) {
-                if (status != STATUS_SUCCESS) {
-                    DLOGV("writeFrame() failed with 0x%08x", status);
+
+            // Copy encoded frame
+            MEMCPY(pSampleConfiguration->pVideoFrameBuffer, h264Data, h264Size);
+            
+            frame.frameData = pSampleConfiguration->pVideoFrameBuffer;
+            frame.size = h264Size;
+            frame.presentationTs += SAMPLE_VIDEO_FRAME_DURATION;
+
+            // Update encoder stats
+            encoderStats.width = CAPTURE_WIDTH;
+            encoderStats.height = CAPTURE_HEIGHT;
+            encoderStats.targetBitrate = 500000;
+            encoderStats.encodeTimeMsec = 10; // Approximate encoding time
+
+            // Send frame to all streaming sessions
+            MUTEX_LOCK(pSampleConfiguration->streamingSessionListReadLock);
+            for (i = 0; i < pSampleConfiguration->streamingSessionCount; ++i) {
+                status = writeFrame(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &frame);
+                if (pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame && status == STATUS_SUCCESS) {
+                    PROFILE_WITH_START_TIME(pSampleConfiguration->sampleStreamingSessionList[i]->offerReceiveTime, "Time to first frame");
+                    pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame = FALSE;
                 }
-            } else {
-                // Reset file index to ensure first frame sent upon SRTP ready is a key frame.
-                fileIndex = 0;
+                updateEncoderStats(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &encoderStats);
+                if (status != STATUS_SRTP_NOT_READY_YET) {
+                    if (status != STATUS_SUCCESS) {
+                        DLOGV("writeFrame() failed with 0x%08x", status);
+                    }
+                }
             }
+            MUTEX_UNLOCK(pSampleConfiguration->streamingSessionListReadLock);
         }
-        MUTEX_UNLOCK(pSampleConfiguration->streamingSessionListReadLock);
 
-        // Adjust sleep in the case the sleep itself and writeFrame take longer than expected. Since sleep makes sure that the thread
-        // will be paused at least until the given amount, we can assume that there's no too early frame scenario.
-        // Also, it's very unlikely to have a delay greater than SAMPLE_VIDEO_FRAME_DURATION, so the logic assumes that this is always
-        // true for simplicity.
+        // Maintain frame rate timing
         elapsed = lastFrameTime - startTime;
         THREAD_SLEEP(SAMPLE_VIDEO_FRAME_DURATION - elapsed % SAMPLE_VIDEO_FRAME_DURATION);
         lastFrameTime = GETTIME();
@@ -243,8 +272,16 @@ PVOID sendVideoPackets(PVOID args)
 
 CleanUp:
     DLOGI("[KVS Master] Closing video thread");
+    
+    // Cleanup resources
+    if (yuv420Buffer != NULL) {
+        MEMFREE(yuv420Buffer);
+    }
+    
+    cleanupH264Encoder(&encoderCtx);
+    cleanupCamera(&cameraCtx);
+    
     CHK_LOG_ERR(retStatus);
-
     return (PVOID) (ULONG_PTR) retStatus;
 }
 
