@@ -10,6 +10,7 @@
 #include <string.h>
 
 #define CAMERA_DEVICE "/dev/video0"
+// #define CAMERA_DEVICE "/dev/video5"
 #define CAPTURE_WIDTH 640
 #define CAPTURE_HEIGHT 480
 #define CAPTURE_FORMAT V4L2_PIX_FMT_YUYV
@@ -26,7 +27,7 @@ typedef struct {
     Buffer buffers[NUM_BUFFERS];
     int width;
     int height;
-    int format;
+    __u32 format;
     int buffer_count;
 } CameraContext;
 

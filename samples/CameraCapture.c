@@ -37,7 +37,10 @@ STATUS initializeCamera(CameraContext* ctx, const char* device, int width, int h
 
     CHK_ERR(ioctl(ctx->fd, VIDIOC_S_FMT, &fmt) >= 0, STATUS_OPERATION_TIMED_OUT, "Failed to set format: %s", strerror(errno));
 
-    DLOGI("Camera format set: %dx%d, format: %c%c%c%c (MJPEG)", 
+    // Store actual format set by driver
+    ctx->format = fmt.fmt.pix.pixelformat;
+
+    DLOGI("Camera format set: %dx%d, format: %c%c%c%c", 
           fmt.fmt.pix.width, fmt.fmt.pix.height,
           (fmt.fmt.pix.pixelformat) & 0xFF,
           (fmt.fmt.pix.pixelformat >> 8) & 0xFF,
@@ -51,10 +54,14 @@ STATUS initializeCamera(CameraContext* ctx, const char* device, int width, int h
 
     CHK_ERR(ioctl(ctx->fd, VIDIOC_REQBUFS, &req) >= 0, STATUS_OPERATION_TIMED_OUT, "Failed to request buffers: %s", strerror(errno));
 
-    CHK_ERR(req.count >= NUM_BUFFERS, STATUS_NOT_ENOUGH_MEMORY, "Insufficient buffer memory on device");
+    DLOGI("Requested %d buffers, driver allocated %d buffers", NUM_BUFFERS, req.count);
+    CHK_ERR(req.count >= 2, STATUS_NOT_ENOUGH_MEMORY, "Insufficient buffer memory: got %d, need at least 2", req.count);
+
+    // Use actual allocated buffer count
+    int actual_buffers = req.count;
 
     // Map buffers
-    for (i = 0; i < NUM_BUFFERS; i++) {
+    for (i = 0; i < actual_buffers; i++) {
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
         buf.index = i;
@@ -67,10 +74,10 @@ STATUS initializeCamera(CameraContext* ctx, const char* device, int width, int h
         CHK_ERR(ctx->buffers[i].start != MAP_FAILED, STATUS_NOT_ENOUGH_MEMORY, "Failed to map buffer: %s", strerror(errno));
     }
 
-    ctx->buffer_count = NUM_BUFFERS;
+    ctx->buffer_count = actual_buffers;
 
     // Queue buffers
-    for (i = 0; i < NUM_BUFFERS; i++) {
+    for (i = 0; i < actual_buffers; i++) {
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
         buf.index = i;
