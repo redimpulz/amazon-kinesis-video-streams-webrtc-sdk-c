@@ -66,6 +66,8 @@ file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/h265SampleFrames" DESTINATION .)
 add_executable(
   kvsWebrtcClientMaster
   Common.c
+  CameraInput.c
+  MjpegH264Extractor.c
   kvsWebRTCClientMaster.c)
 target_link_libraries(kvsWebrtcClientMaster kvsWebrtcClient kvsWebrtcSignalingClient ${EXTRA_DEPS} kvsCommonLws kvspicUtils websockets)
 
@@ -74,6 +76,28 @@ add_executable(
   Common.c
   kvsWebRTCClientViewer.c)
 target_link_libraries(kvsWebrtcClientViewer kvsWebrtcClient kvsWebrtcSignalingClient ${EXTRA_DEPS} kvsCommonLws kvspicUtils websockets)
+
+add_executable(
+  kvsWebrtcClientMasterCamera
+  Common.c
+  CameraInput.c
+  MjpegH264Extractor.c
+  kvsWebRTCClientMasterCamera.c)
+target_link_libraries(kvsWebrtcClientMasterCamera kvsWebrtcClient kvsWebrtcSignalingClient ${EXTRA_DEPS} kvsCommonLws kvspicUtils websockets)
+
+add_executable(
+  kvsWebrtcClientMasterDualCamera
+  Common.c
+  CameraInput.c
+  MjpegH264Extractor.c
+  V4L2LoopbackOutput.c
+  kvsWebRTCClientMasterDualCamera.c)
+target_link_libraries(kvsWebrtcClientMasterDualCamera kvsWebrtcClient kvsWebrtcSignalingClient ${EXTRA_DEPS} kvsCommonLws kvspicUtils websockets)
+
+add_executable(
+  kvsWebrtcClientMasterCameraDebug
+  kvsWebRTCClientMasterCameraDebug.c)
+# デバッグツールは軽量にするため、最小限のライブラリのみリンク
 
 add_executable(
         discoverNatBehavior
@@ -106,7 +130,6 @@ if(GST_FOUND)
   )
 endif()
 
-install(TARGETS kvsWebrtcClientMaster kvsWebrtcClientViewer discoverNatBehavior
+install(TARGETS kvsWebrtcClientMaster kvsWebrtcClientViewer kvsWebrtcClientMasterCamera kvsWebrtcClientMasterDualCamera discoverNatBehavior
   RUNTIME DESTINATION bin
 )
-
